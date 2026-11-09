@@ -60,6 +60,7 @@ ARGS = {
     "tests/test_input_background.py": ["--cc", "gcc"],
     "tests/test_framegen_resources.py": ["--cxx", "{cxx}", "--headers", "{vulkan_headers}"],
     "tests/test_framegen_preset.py": ["--cxx", "{cxx}"],
+    "tests/test_mirror_heat.py": ["--cxx", "{cxx}"],
     "tests/test_oot_wide_save_picture.py": ["--cc", "gcc"],
     "nx2/test_import_windows.py": ["--cxx", "g++"],
     "tests/test_import_write_watch.py": ["--cxx", "{cxx}"],

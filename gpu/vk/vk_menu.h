@@ -29,6 +29,7 @@ struct Options {
     int show_fps = 0;
     int menu_shortcut = 0;   // 0 Insert or F1, 1 F1 only (F1 always opens the menu)
     int menu_size = 0;   // (hookshot) the overlays' size: 0 Auto, 1 Small, 2 Medium, 3 Large (gpu/vk/vk_ui.h unit)
+    int refresh = 0;      // "Refresh memory": a button, back to 0 at once (vk_texture.cpp texture_refresh_request)
     int fullscreen = 0;   // borderless, at the monitor's size: F11 is the same setting
     int gpu_device = 0;   // graphics card index: 0 Auto, 1..N device 0..N-1 (gpu/vk/vk_main.cpp; RX_VK_DEVICE)
     int pad_background = 0;   // the controllers count while another window has the focus (host/nn_hid.c; HOS_INPUT_BACKGROUND)

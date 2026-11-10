@@ -656,7 +656,10 @@ uint64_t hos_reserved_cpus(void) {
     static uint64_t mask = ~0ull;
     if (mask != ~0ull) return mask;
     mask = 0;
-    if (getenv("HOS_RESERVE_CORE") && !atoi(getenv("HOS_RESERVE_CORE"))) return mask;
+    /* (no replay thread runs when RX_VK_ASYNC is off (Hookshot's default): keeping a physical core from the game's
+       six vcores on a 6-core CPU starved them onto five cores unless HOS_RESERVE_CORE=1 asks for it) */
+    const char *rc = getenv("HOS_RESERVE_CORE"), *as = getenv("RX_VK_ASYNC");
+    if (rc ? !atoi(rc) : !(as && atoi(as))) return mask;
 #if defined(_WIN32)
     {
         int cores = 0;

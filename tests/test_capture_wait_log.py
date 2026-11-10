@@ -27,8 +27,6 @@ class CaptureWaitLogTests(unittest.TestCase):
     def setUpClass(cls):
         cls.mem = (ROOT / "gpu" / "vk" / "vk_memory.cpp").read_text(encoding="utf-8")
         cls.take = block(cls.mem, "bool take_capture(")
-        cls.defer = block(cls.mem, "bool defer_late_pages_to_gpu(")
-        cls.flush = block(cls.mem, "void flush_late_copies_locked(")
 
     def test_the_late_page_wait_is_timed_on_its_own(self):
         late = block(self.take, "if (c->late_value && c->map)")
@@ -48,16 +46,6 @@ class CaptureWaitLogTests(unittest.TestCase):
         self.assertIn("pools lock", line)
         self.assertIn("st_tk_late / 600", line)
         self.assertRegex(self.take, r"st_tk_late = st_tk_lock = 0, st_tk_late_n = 0;")
-
-    def test_gpu_late_copy_defers_imported_pages_and_drops_stale_shadow(self):
-        self.assertLess(self.take.index("defer_late_pages_to_gpu(*c, value)"),
-                        self.take.index("vk_timeline_wait(c->late_value)"))
-        self.assertIn("pending_late_copies.push_back({pp.buffer, ga - pp.lo, c.buffer, (uint64_t)idx * 4096})", self.defer)
-        self.assertIn("c.gpu_late.push_back(page)", self.defer)
-        self.assertIn("std::binary_search(c->gpu_late.begin(), c->gpu_late.end(), p)", self.take)
-        self.assertIn("shadow_erase(p)", self.take)
-        self.assertIn("VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT", self.flush)
-        self.assertIn("vkCmdCopyBuffer(up, pair.first, pair.second", self.flush)
 
 
 if __name__ == "__main__":

@@ -609,14 +609,19 @@ task shader (a culling pass) until the kernel resets it ([#817](https://github.c
 It is a workaround, not a fix: those are task + mesh programs, so the geometry they draw goes with them, and key models
 are missing while it is set. Off unless set.
 
-The switches for scripted test runs, screenshots, frame dumps and profiles are in the
-[development guide](docs/development.md#switches-for-testing-and-debugging).
-
 `RX_VK_WB_MAX_KB=<KB>` stops the write-back of written GPU bindings larger than that. OoT writes tens of MB of culling
 lists and per-frame buffers through the GPU that the CPU never reads, and copying them back sat on every submit's
 memory sync: in Hyrule Field on a 10 GB RTX 3080, about 66 MB and 4.4 ms a submit, holding the scene at 45-48 fps.
 `RX_VK_WB_MAX_KB=1024` still copies the small results the CPU does read (the exposure meter and the like) and took the
 same scene to 59-60 fps. `0` or unset copies every written binding, as before.
+
+`RX_VK_TAAU_MODE=bilinear` swaps the gameplay upscaler's FSR 1 (EASU + RCAS, the default) for the old bilinear
+stand-in, and is also the only mode in which `RX_VK_TAAU_FXAA` does anything: the FSR path replaces FXAA (EASU's
+edge-adaptive kernel already does the edge work FXAA was added for), so the two never run together.
+`RX_VK_TAAU_SHARPNESS=<stops>` (0 the sharpest, 2 soft; default 0.2) tunes RCAS.
+
+The switches for scripted test runs, screenshots, frame dumps and profiles are in the
+[development guide](docs/development.md#switches-for-testing-and-debugging).
 
 </details>
 

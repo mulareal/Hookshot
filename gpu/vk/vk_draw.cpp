@@ -6279,8 +6279,9 @@ bool upscale_stub(VkCommandBuffer cmd, const NvnState& s, uint64_t key) {
             const VkImageView output_view = texture_view(dst, &out, nullptr, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage,
                                                          &output_format, VK_FORMAT_B10G11R11_UFLOAT_PACK32);
             if (input_format == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32 && output_format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 &&
-                typed_upscale(cmd, input_view, output_view, dst, 0, key, "generic RGB9E5 fallback", false,
-                              src->width, src->height)) {
+                ((fsr3_inputs::wanted() && fsr3_upscale(cmd, key, false, src, input_view, dst, output_view, 0)) ||
+                 typed_upscale(cmd, input_view, output_view, dst, 0, key, "generic RGB9E5 fallback", false,
+                               src->width, src->height))) {
                 full_barrier(cmd);
                 texture_written(dst);
                 return true;
@@ -6310,16 +6311,15 @@ bool upscale_stub(VkCommandBuffer cmd, const NvnState& s, uint64_t key) {
     return true;
 }
 
-/// (hookshot) OoT's gameplay TAAU network (fd029a317a9a4b94) stood in for: its input upscaled into its output
-/// (shaders/taau_upscale.comp). The network's translation loses the blue channel, the yellow cast over every
-/// scene; with this the picture is right, without the network's temporal anti-aliasing.
-/// RX_VK_TAAU_KEYS=<program key prefixes,...> (default fd029a317a9a4b94; "-": none, the network runs)
+/// (hookshot) OoT's gameplay TAAU networks (fd029a317a9a4b94 at 4/3, 9dc98871eb7fc101 at full size) stood in for: their
+/// input upscaled into their output (shaders/taau_easu.comp + taau_rcas.comp, or taau_upscale.comp).
+/// RX_VK_TAAU_KEYS=<program key prefixes,...> (default fd029a317a9a4b94,9dc98871eb7fc101; "-": none, the network runs)
 bool taau_key(uint64_t key) {
     // (the real network where the card runs it as the console does; on the software multiplies it cost most of a frame on AMD's cards, and a
     // locked 60 with this in its place: Hookshot issue 52)
     static const char* keys = getenv("RX_VK_TAAU_KEYS") ? getenv("RX_VK_TAAU_KEYS")
                               : Shader::Backend::SPIRV::mma_software || getenv("RX_VK_NO_F16")
-                                    ? "fd029a317a9a4b94" : "-";   // (RX_VK_NO_F16: vk_shader.cpp leaves the network out)
+                                    ? "fd029a317a9a4b94,9dc98871eb7fc101" : "-";   // (RX_VK_NO_F16: vk_shader.cpp leaves the network out)
     char hex[24];
     snprintf(hex, sizeof hex, "%016llx", (unsigned long long)key);
     bool match = false;
@@ -6573,7 +6573,7 @@ bool taau_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p) {
     uint32_t in_level = 0;
     if (in_handle) texture_view_of(in_handle, view_type(td.type), ViewUse::Sample, VK_FORMAT_UNDEFINED, &in_tex, &in_level);
     if (!in_tex) return false;
-    const char* keys = getenv("RX_VK_TAAU_KEYS") ? getenv("RX_VK_TAAU_KEYS") : "fd029a317a9a4b94";
+    const char* keys = getenv("RX_VK_TAAU_KEYS") ? getenv("RX_VK_TAAU_KEYS") : "fd029a317a9a4b94,9dc98871eb7fc101";
     return typed_upscale(cmd, dw().imgs[0].imageView, dw().imgs[ntex].imageView, out, level, p.key, keys, true,
                          std::max(1u, in_tex->width >> in_level), std::max(1u, in_tex->height >> in_level));
 }
@@ -6982,18 +6982,20 @@ void precompile_run(void (*progress)(size_t done, size_t total)) {
             if (i >= total) return;
             if (i < computes.size()) {
                 Program& p = *computes[i];
-                VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-                ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-                ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-                ci.stage.module = p.stages[0].module;
-                ci.stage.pName = "main";
-                pin_subgroup(ci.stage, p.workgroup[0]);
-                ci.layout = p.layout;
-                VkPipeline made = VK_NULL_HANDLE;
-                if (guarded_compute(pcache, &ci, &made) != VK_SUCCESS) made = VK_NULL_HANDLE;
-                std::lock_guard lk(pre->mu);
-                if (!pre->abandoned) p.compute_pipeline = made;
-                else if (made) vkDestroyPipeline(dev.device, made, nullptr);   // (the game went on: it builds its own)
+                if (!taau_key(p.key)) {
+                    VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+                    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+                    ci.stage.module = p.stages[0].module;
+                    ci.stage.pName = "main";
+                    pin_subgroup(ci.stage, p.workgroup[0]);
+                    ci.layout = p.layout;
+                    VkPipeline made = VK_NULL_HANDLE;
+                    if (guarded_compute(pcache, &ci, &made) != VK_SUCCESS) made = VK_NULL_HANDLE;
+                    std::lock_guard lk(pre->mu);
+                    if (!pre->abandoned) p.compute_pipeline = made;
+                    else if (made) vkDestroyPipeline(dev.device, made, nullptr);   // (the game went on: it builds its own)
+                }
             } else if (i < computes.size() + fallbacks.size()) {
                 // (a program a draw is already building is left to it: compute_state, as in fallback_pipelines_ready)
                 Program& p = *fallbacks[i - computes.size()];
@@ -7007,13 +7009,18 @@ void precompile_run(void (*progress)(size_t done, size_t total)) {
                 const Program* p = program_find(n.prog, n.variant);
                 if (p) {
                     const VkPipeline made = build_graphics(*p, n.s, note_targets(n), (VkPrimitiveTopology)n.topo);
-                    std::lock_guard lk(note_mu);
-                    auto it = pipelines.find(n.key);
-                    if (it == pipelines.end()) {
-                        auto e = std::make_unique<PipeEntry>();
-                        e->pipeline = made;
-                        e->ready.store(true, std::memory_order_release);
-                        pipelines.emplace(n.key, std::move(e));
+                    std::lock_guard lk(pre->mu);
+                    if (!pre->abandoned) {
+                        std::lock_guard nlk(note_mu);
+                        auto it = pipelines.find(n.key);
+                        if (it == pipelines.end()) {
+                            auto e = std::make_unique<PipeEntry>();
+                            e->pipeline = made;
+                            e->ready.store(true, std::memory_order_release);
+                            pipelines.emplace(n.key, std::move(e));
+                        }
+                    } else if (made) {
+                        vkDestroyPipeline(dev.device, made, nullptr);
                     }
                 }
             }

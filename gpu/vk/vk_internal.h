@@ -325,7 +325,7 @@ struct ProfThread {
     int open, k;     // (the PROF_HOT scopes open, and the outermost one's weight: 0 not timed)
     int64_t exact;   // (the nanoseconds PROF / PROF_EXACT timed on this thread so far)
 };
-inline thread_local ProfThread prof_t;
+inline constinit thread_local ProfThread prof_t{};
 struct ProfScope {
     int phase;   // (-1: PROF_EXACT, no phase of its own)
     int64_t t0, x0;

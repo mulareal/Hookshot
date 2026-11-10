@@ -65,6 +65,7 @@ constexpr uint64_t kPageShift = 12;
 static std::vector<uint8_t> guest(4096 * 4096);   // (16 MB of "guest memory")
 struct Host { void* guest_base() { return guest.data(); } uint64_t guest_size() { return guest.size(); } } host_obj, *host = &host_obj;
 static bool guarded_copy(void* dst, const void* src, size_t n) { std::memcpy(dst, src, n); return true; }
+static void copy_fence() {}
 static int GetCurrentThread() { return 0; }
 static void SetThreadDescription(int, const wchar_t*) {}
 ''' + "\n".join(parts) + r'''

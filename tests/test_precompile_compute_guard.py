@@ -43,10 +43,11 @@ struct VkComputePipelineCreateInfo {
 };
 struct {uintptr_t device=0x1234;}dev;
 VkPipelineCache pcache=0x5678;
-struct Program {struct Stage{uintptr_t module;};std::vector<Stage>stages{{0x2468}};unsigned workgroup[3]{32,1,1};uintptr_t layout=0x1357;VkPipeline compute_pipeline=0xbeef;};
+struct Program {uint64_t key=0x1111;struct Stage{uintptr_t module;};std::vector<Stage>stages{{0x2468}};unsigned workgroup[3]{32,1,1};uintptr_t layout=0x1357;VkPipeline compute_pipeline=0xbeef;};
 struct Pre {std::mutex mu;bool abandoned=false;};
-int mode=0,calls=0,destroys=0; bool completed=false;
+int mode=0,calls=0,destroys=0; bool completed=false,skip_taau=false;
 #define CHECK(c) do {if(!(c)){std::fprintf(stderr,"CHECK failed line %d: %s\n",__LINE__,#c);std::exit(7);}}while(0)
+bool taau_key(uint64_t k){CHECK(k==0x1111);return skip_taau;}
 const VkComputePipelineCreateInfo* expected_ci=nullptr; VkPipeline* expected_out=nullptr;
 void pin_subgroup(decltype(VkComputePipelineCreateInfo::stage)&stage,unsigned x){CHECK(x==32);CHECK(stage.stage==12);}
 VkResult vkCreateComputePipelines(uintptr_t device,VkPipelineCache cache,unsigned count,const VkComputePipelineCreateInfo*ci,const void*allocator,VkPipeline*out){
@@ -88,8 +89,9 @@ int main(int argc,char**argv){
   expected_ci=&ci;expected_out=&out;
   CHECK(guarded_compute(pcache,&ci,&out)==-77);CHECK(calls==1&&out==0);return 0;
  }
- mode=which==1?1:which==2?2:0;pre.abandoned=which==3;
+ mode=which==1?1:which==2?2:0;pre.abandoned=which==3;skip_taau=which==5;
  std::thread worker([&]{actual_arm(program,&pre);});worker.join();
+ if(which==5){CHECK(completed&&calls==0&&program.compute_pipeline==0xbeef&&destroys==0);return 0;}
  CHECK(completed&&calls==1);
  if(which==0)CHECK(program.compute_pipeline==0xcafe&&destroys==0);
  if(which==1||which==2)CHECK(program.compute_pipeline==0&&destroys==0);
@@ -99,10 +101,14 @@ int main(int argc,char**argv){
 '''
     with tempfile.TemporaryDirectory(prefix='precompile-seh-') as tmp:
         path=Path(tmp); unit=path/'fixture.cpp';exe=path/'fixture.exe';unit.write_text(cpp,encoding='utf-8')
-        cmd=[args.cxx,'--target=x86_64-pc-windows-msvc','-std=c++20',str(unit),'-o',str(exe),'-fuse-ld=lld']
+        ver=subprocess.run([args.cxx,'--version'],capture_output=True,text=True,timeout=10).stdout.lower()
+        target=(['--target=x86_64-w64-mingw32','-fms-extensions']
+                if ('mingw' in ver or 'windows-gnu' in ver or os.environ.get('HOOKSHOT_MINGW'))
+                else ['--target=x86_64-pc-windows-msvc'])
+        cmd=[args.cxx]+target+['-std=c++20',str(unit),'-o',str(exe),'-fuse-ld=lld']
         if args.linker:cmd+=['-B'+str(args.linker.parent)]
         subprocess.run(cmd,check=True,timeout=60)
-        for case in [0,1,2,3,4]:
+        for case in [0,1,2,3,4,5]:
             result=subprocess.run([str(exe),str(case)],timeout=10)
             code=result.returncode & 0xffffffff
             expected=0xc0000005 if args.expect_fault and case==1 else 0

@@ -153,10 +153,23 @@ VkImageView texture_view(Texture *t, const nvn_tex *, const nvn_view *v, VkImage
     *f = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
     return (VkImageView)102;
 }
+namespace fsr3_inputs {
+static bool fsr3_wanted_flag = false;
+static bool wanted() { return fsr3_wanted_flag; }
+}
+static int fsr3_calls = 0;
+static bool fsr3_ok = true;
+static bool fsr3_upscale(VkCommandBuffer, uint64_t, bool known, Texture *in, VkImageView input,
+                         Texture *out, VkImageView output, uint32_t level) {
+    assert(!known && in == &src && input == (VkImageView)101 && out == &dst && output == (VkImageView)102 && level == 0);
+    fsr3_calls++;
+    return fsr3_ok;
+}
 static bool typed_upscale(VkCommandBuffer, VkImageView input, VkImageView output, Texture *t,
-                          uint32_t level, uint64_t, const char *, bool temporal) {
+                          uint32_t level, uint64_t, const char *, bool temporal,
+                          uint32_t src_w, uint32_t src_h) {
     assert(input == (VkImageView)101 && output == (VkImageView)102 && t == &dst && level == 0 &&
-           !temporal);
+           !temporal && src_w == 64 && src_h == 32);
     typed_calls++;
     return pipeline_ok;
 }
@@ -209,11 +222,15 @@ int main(int argc, char **argv) {
         missing_sample = true;
     if (mode == "no-e5-linear")
         missing_linear = true;
+    if (mode == "fsr3")
+        fsr3_inputs::fsr3_wanted_flag = true;
     NvnState state;
     state.tex[5][0] = 1;
     state.img[5][0] = 2;
     assert(upscale_stub((VkCommandBuffer)5, state, key));
-    if (mode == "captured") {
+    if (mode == "fsr3") {
+        assert(fsr3_calls == 1 && typed_calls == 0 && views == 2 && blits == 0 && writes == 1);
+    } else if (mode == "captured") {
         if (typed_calls != 1 || views != 2 || blits != 0) {
             puts("RED: captured RGB9E5 input still used physical-format blit");
             return 7;
@@ -244,7 +261,7 @@ def main():
         exe = tmp / ('check.exe' if os.name == 'nt' else 'check')
         source.write_text(PREFIX + body + SUFFIX, encoding='utf-8')
         subprocess.run([args.cxx, '-std=c++20', '-UNDEBUG', str(source), '-o', str(exe)], env=env, check=True)
-        cases = ('captured', 'r11', 'movie', 'view', 'skip', 'mip', 'swizzle', 'fd', '9dc',
+        cases = ('captured', 'fsr3', 'r11', 'movie', 'view', 'skip', 'mip', 'swizzle', 'fd', '9dc',
                  'pipeline-failure', 'no-storage', 'no-e5-sample', 'no-e5-linear')
         for case in cases:
             subprocess.run([str(exe), case], env=env, check=True)

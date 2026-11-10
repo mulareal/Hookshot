@@ -246,13 +246,14 @@ void driver_bank(const NvnState& s, int bank, int stage, uint8_t d[0xA00]) {
 struct PointerEntry { uint64_t addr, size; };
 constexpr uint32_t kPointerTable = 0x880, kPointerEntries = 3;
 const PointerEntry* pointer_table(const NvnState& s, int stage) {
-    thread_local PointerEntry e[kPointerEntries];
-    thread_local uint64_t for_gen = ~0ull;
-    thread_local const NvnState* for_state = nullptr;
-    thread_local int for_stage = -1;
-    if (for_gen == s.bind_gen && for_state == &s && for_stage == stage) return e;
-    for_gen = s.bind_gen, for_state = &s, for_stage = stage;
-    std::memset(e, 0, sizeof e);
+    const int st = std::clamp(stage, 0, kNvnStages - 1);
+    thread_local PointerEntry e_all[kNvnStages][kPointerEntries];
+    thread_local uint64_t for_gen[kNvnStages] = {~0ull, ~0ull, ~0ull, ~0ull, ~0ull, ~0ull, ~0ull, ~0ull};
+    thread_local const NvnState* for_state[kNvnStages]{};
+    PointerEntry* e = e_all[st];
+    if (for_gen[st] == s.bind_gen && for_state[st] == &s) return e;
+    for_gen[st] = s.bind_gen, for_state[st] = &s;
+    std::memset(e, 0, sizeof e_all[st]);
     uint64_t found[32];
     uint32_t n = 0;
     const auto bound = [&](uint64_t v) {

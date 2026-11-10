@@ -15,7 +15,7 @@ a = p.parse_args()
 source = a.source.resolve()
 main = (source/'gpu/vk/vk_main.cpp').read_text()
 replay = (source/'gpu/vk/vk_replay.cpp').read_text()
-present = replay[replay.index('void present_image('):replay.index('void present_image(')+12000]
+present = replay[replay.index('void present_image('):replay.index('void present_image(')+16000]
 signal = re.search(r'    signal\.semaphore = [^;]+;', present)[0]
 wait = re.search(r'    pi\.pWaitSemaphores = [^;]+;', present)[0]
 acquire_wait = re.search(r'    waits\[0\]\.semaphore = [^;]+;', present)[0]
@@ -42,7 +42,7 @@ constexpr int VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO=1, VK_SUCCESS=0;
 constexpr int VK_PRESENT_MODE_MAILBOX_KHR=1, VK_PRESENT_MODE_IMMEDIATE_KHR=2;
 struct VkSemaphoreCreateInfo { int type; };
 struct Extent { uint32_t width,height; };
-struct Device { int device=1;uint64_t swapchain=0;int swap_format=0;Extent swap_extent{};bool swap_mutable=false;
+struct Device { int device=1;uint64_t swapchain=0;int swap_format=0;Extent swap_extent{};bool swap_mutable=false;uint32_t swap_spare=0;
     std::vector<VkImage> swap_images;std::vector<VkSemaphore> swap_rendered;
     std::atomic<uint64_t> swap_resize{0};std::mutex present_mu; } dev;
 struct { int hdr=0; } opts;   // (the Insert menu's HDR row: present_image remakes the swapchain when it changes)
@@ -92,7 +92,7 @@ void vkDeviceWaitIdle(int) {idle=true;}
 void device_wait_idle_locked() {queue_flush_locked();vkDeviceWaitIdle(dev.device);}
 void swap_views_drop() {}   // (hookshot: the overlays' views, vk_main.cpp)
 bool recreate() {
-    uint32_t n=0,width=640,height=480; struct {int format=1;} fmt;
+    uint32_t n=0,width=640,height=480; struct {int format=1;} fmt; struct {uint32_t minImageCount=2;} caps;
     CreateInfo ci;int mode=0;VkResult result;
 ''' + tail + r'''
     reflex_swapchain_created(sc);

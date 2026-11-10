@@ -781,7 +781,9 @@ struct Capture {
     uint64_t bsize = 0;
     size_t nbytes = 0;
     std::vector<uint32_t> late;      // (indices into pages: copied again by the replay once late_value is done)
+    std::vector<uint32_t> gpu_late;  // (pages deferred to GPU copy: skipped in CPU texture shadow)
     uint64_t late_value = 0;
+    bool no_gpu_late = false;
 };
 std::mutex cap_mu;
 std::deque<std::unique_ptr<Capture>> captures;
@@ -877,7 +879,7 @@ bool cap_buf_get(uint64_t need, VkBuffer& buffer, VmaAllocation& alloc, void*& m
     }
     size = cap_buf_size(need);
     map = nullptr;
-    return create_buffer_cached(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, buffer, alloc, &map,
+    return create_buffer_cached(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, buffer, alloc, &map,
                                 size >= (16ull << 20) && !getenv("RX_VK_CAP_BLOCKS")) && map;
 }
 std::vector<std::pair<uint64_t, uint64_t>> cap_ranges;   // (the mirrored pools the captures take, as of the last one)
@@ -1475,7 +1477,7 @@ std::unique_ptr<Capture> capture_make() {
         if (!spare.empty()) c = std::move(spare.back()), spare.pop_back();
     }
     if (!c) c = std::make_unique<Capture>();
-    c->pages.clear(), c->copied.clear(), c->slots.clear(), c->nbytes = 0, c->late.clear(), c->late_value = 0;
+    c->pages.clear(), c->copied.clear(), c->slots.clear(), c->nbytes = 0, c->late.clear(), c->gpu_late.clear(), c->late_value = 0, c->no_gpu_late = false;
     if (c->map) cap_buf_free(c->buffer, c->alloc, c->map, c->bsize), c->buffer = VK_NULL_HANDLE, c->map = nullptr;
     // (only the pools mirrored in VRAM, the ones the mirrors are filled from, and only their part of the write marks:
     // every written page was taken at first (hundreds of MB a submit where the game streams its world), and the whole
@@ -1604,8 +1606,42 @@ void memory_recording_value(uint64_t value, uint64_t completed) {
     mem_rec_value = value;
     if (completed > mem_completed) mem_completed = completed;
 }
+namespace {
+struct LateCopy { VkBuffer src; uint64_t src_off; VkBuffer dst; uint64_t dst_off; };
+std::vector<LateCopy> pending_late_copies;   // (pools_mu: late capture pages copied on the GPU before mirror syncs)
+bool late_recording_open = false;            // (pools_mu: mirror_upload, visible here)
+bool defer_late_pages_to_gpu(Capture& c, uint64_t value) {
+    static const bool on = !getenv("RX_VK_LATE_GPU") || atoi(getenv("RX_VK_LATE_GPU")) != 0;
+    if (!on || !dev.external_memory_host || !c.buffer || c.late.empty() || c.copied.empty()) return false;
+    std::lock_guard lk(pools_mu);
+    if (late_recording_open) return false;
+    for (uint32_t idx : c.late) {
+        if (idx >= c.pages.size() || !std::binary_search(c.slots.begin(), c.slots.end(), idx)) return false;
+        const uint64_t ga = (uint64_t)c.pages[idx] << kPageShift;
+        auto it = imported.upper_bound(ga);
+        if (it == imported.begin()) return false;
+        --it;
+        const Pool& pp = it->second;
+        if (!pp.buffer || ga < pp.lo || ga + 4096 > pp.hi) return false;
+    }
+    c.gpu_late.reserve(c.late.size());
+    for (uint32_t idx : c.late) {
+        const uint32_t page = c.pages[idx];
+        const uint64_t ga = (uint64_t)page << kPageShift;
+        Pool& pp = (--imported.upper_bound(ga))->second;
+        if (pp.last_value < value) pp.last_value = value;
+        pending_late_copies.push_back({pp.buffer, ga - pp.lo, c.buffer, (uint64_t)idx * 4096});
+        c.gpu_late.push_back(page);
+    }
+    std::sort(c.gpu_late.begin(), c.gpu_late.end());
+    c.late.clear();
+    c.late_value = 0;
+    return true;
+}
+} // namespace
 bool take_capture(std::unique_ptr<Capture> c, uint64_t value, uint64_t completed) {
     const auto tk0 = std::chrono::steady_clock::now();
+    if (c->late_value && c->map && !c->no_gpu_late) defer_late_pages_to_gpu(*c, value);
     if (c->late_value && c->map) {   // (the pages a submission still on the GPU writes back: see capture_make)
         // (timed apart: the replay thread waits here for the GPU, the more often the fewer pools have a mirror. With
         // RX_VK_MIRROR_MB=1024 on an 8 GB card it was most of a capture's 2.4-3 ms, six submits a frame: Hyrule Field at
@@ -1675,6 +1711,10 @@ bool take_capture(std::unique_ptr<Capture> c, uint64_t value, uint64_t completed
             for (; i < c->copied.size(); i++) {
                 const uint32_t p = c->copied[i];
                 if (!in_tex_merged((uint64_t)p << 12)) continue;
+                if (!c->gpu_late.empty() && std::binary_search(c->gpu_late.begin(), c->gpu_late.end(), p)) {
+                    shadow_erase(p);
+                    continue;
+                }
                 if (shadow_n.load(std::memory_order_relaxed) >= kShadowMax && !shadow.count(p)) {
                     if (swept) break;
                     swept = true;
@@ -1750,6 +1790,7 @@ bool memory_take_capture(uint64_t value, uint64_t completed) {
 bool memory_capture_now(uint64_t value, uint64_t completed) {
     if (completed > mem_completed) mem_completed = completed;
     std::unique_ptr<Capture> c = capture_make();
+    if (c) c->no_gpu_late = true;
     return c && take_capture(std::move(c), value, completed);
 }
 
@@ -2302,8 +2343,50 @@ void append_capture_copy(std::vector<VkBufferCopy>& runs, const VkBufferCopy& ne
     runs.push_back(next);
 }
 
+void flush_late_copies_locked() {   // (pools_mu held)
+    if (pending_late_copies.empty() || !mirror_upload || par_active.load(std::memory_order_relaxed)) return;
+    VkCommandBuffer up = upload_command_buffer();
+    if (!up) return;
+    std::map<std::pair<VkBuffer, VkBuffer>, std::vector<VkBufferCopy>> batches;
+    for (const LateCopy& lc : pending_late_copies) {
+        bool live = false;
+        for (auto& [k, cb] : cap_bufs)
+            if (cb.buffer == lc.dst) {
+                cb.last_use = std::max(cb.last_use, mem_rec_value);
+                live = true;
+                break;
+            }
+        if (live) append_capture_copy(batches[{lc.src, lc.dst}], {lc.src_off, lc.dst_off, 4096});
+    }
+    pending_late_copies.clear();
+    if (batches.empty()) return;
+    VkMemoryBarrier2 pre{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    pre.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    pre.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+    pre.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+    pre.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    VkDependencyInfo pre_di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    pre_di.memoryBarrierCount = 1, pre_di.pMemoryBarriers = &pre;
+    vkCmdPipelineBarrier2(up, &pre_di);
+    GprofSpan gp(up, "late capture pages (guest memory -> capture buffer)");
+    for (const auto& [pair, rs] : batches) {
+        vkCmdCopyBuffer(up, pair.first, pair.second, (uint32_t)rs.size(), rs.data());
+        gp.items += (int)rs.size();
+        for (const VkBufferCopy& r : rs) gp.bytes += r.size;
+    }
+    VkMemoryBarrier2 post{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    post.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+    post.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    post.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_HOST_BIT;
+    post.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_HOST_READ_BIT;
+    VkDependencyInfo post_di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    post_di.memoryBarrierCount = 1, post_di.pMemoryBarriers = &post;
+    vkCmdPipelineBarrier2(up, &post_di);
+}
+
 /// The pages of the pool the CPU wrote since its mirror's sync, copied in (the upload command buffer)
 void mirror_sync(Pool& p) {
+    flush_late_copies_locked();
     p.synced_epoch = mirror_epoch;
     p.sync_seg = texture_segment();
     mirror_synced.push_back(&p);
@@ -3036,6 +3119,8 @@ void memory_begin_submission() {
     retired_imports_give_back();
     mirror_epoch++;
     mirror_upload = true;
+    late_recording_open = true;
+    flush_late_copies_locked();
     mirror_synced.clear();
     writebacks.clear();
     imports_give_back();
@@ -3667,6 +3752,9 @@ void memory_end_submission(VkCommandBuffer cmd) {
     // in the mirror and written back; CPU writes collected at the next submission get a newer generation)
     for (Pool* p : mirror_synced) p->synced_gen = gen_now;
     mirror_synced.clear();
+    flush_late_copies_locked();
+    pending_late_copies.clear();
+    late_recording_open = false;
     mirror_upload = false;
 }
 

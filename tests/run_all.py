@@ -188,13 +188,24 @@ def header_dir(env, cpm_name, probe):
     return None
 
 
+def dotnet_sdk():
+    p = which("dotnet")
+    if not p:
+        return None
+    try:
+        r = subprocess.run([p, "--list-sdks"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=10)
+        return p if r.returncode == 0 and r.stdout.strip() else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def find_tools():
     return {
         "spirv_headers": header_dir("HOOKSHOT_SPIRV_HEADERS", "spirv-headers", os.path.join("spirv", "unified1", "spirv.h")),
         "vulkan_headers": header_dir("HOOKSHOT_VULKAN_HEADERS", "vulkanheaders", os.path.join("vulkan", "vulkan.h")),
         "spirv_val": which("spirv-val"),
         "glslang": which("glslangValidator", "glslang"),
-        "dotnet": which("dotnet"),
+        "dotnet": dotnet_sdk(),
         "cxx": which(os.environ.get("CXX", ""), "clang++", "g++", "c++"),
     }
 

@@ -103,6 +103,7 @@ int main(int argc,char** argv){
     else if(!strcmp(argv[1],"prefixes"))configured_keys="abcd,fd029a";
     else if(strcmp(argv[1],"software"))return 91;
     check(taau_key(target)==expected && !taau_key(0),"existing key matcher unchanged");
+    if(!configured_keys) check(taau_key(0x9dc98871eb7fc101ull)==expected,"full-size TAAU key matcher matches default");
     NvnState state{};Program program{target,{}};Stage stage;
     stage.info.texture_descriptors={{1,23},{2,23}};stage.info.image_descriptors={{1,23}};program.stages.push_back(stage);
     key_reads=0;
@@ -134,9 +135,9 @@ int main(int argc,char** argv){
             check(forwarded_src_w==(1024>>7) && forwarded_src_h==(512>>7),"source size forwarded shifted by its level");
             check(forwarded_text==text,"current key text forwarded verbatim");
         };
-        accepted(configured_keys?configured_keys:"fd029a317a9a4b94",true);
+        accepted(configured_keys?configured_keys:"fd029a317a9a4b94,9dc98871eb7fc101",true);
         configured_keys="later diagnostic override";accepted(configured_keys,false);
-        configured_keys=nullptr;accepted("fd029a317a9a4b94",true);
+        configured_keys=nullptr;accepted("fd029a317a9a4b94,9dc98871eb7fc101",true);
     }
     printf("%s failures=%u eligible=%d\n",argv[1],failures,upscale_calls);
     return failures?1:0;

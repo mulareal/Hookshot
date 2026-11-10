@@ -66,6 +66,7 @@ const char* hn_framegen(int, int) { return ""; }
 const char* tx_preset(int) { return ""; }
 const char* hn_preset(int, int) { return ""; }
 const char* tx_fps_cap(int) { return ""; }
+void texture_refresh_request() {}
 /* INI_KEY */
 /* STOPS */
 /* PRESET */

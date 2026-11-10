@@ -59,6 +59,7 @@ ARGS = {
     "tests/test_vulkan_copy_span.py": ["--cxx", "{cxx}", "--headers", "{vulkan_headers}"],
     "tests/test_vulkan_copy_span_gpu_compile.py": ["--cxx", "{cxx}", "--headers", "{vulkan_headers}"],
     "tests/test_input_background.py": ["--cc", "gcc"],
+    "tests/test_log_batch.py": ["--cc", "gcc"],
     "tests/test_framegen_resources.py": ["--cxx", "{cxx}", "--headers", "{vulkan_headers}"],
     "tests/test_framegen_preset.py": ["--cxx", "{cxx}"],
     "tests/test_mirror_heat.py": ["--cxx", "{cxx}"],
@@ -142,6 +143,7 @@ MODULES = {
 SKIP = {
     "tests/test_builder_dlss_update.py": ({"linux"}, "Windows Builder update policy; .NET 8 fixture exercised on Windows"),
     "tests/test_precompile_compute_guard.py": ({"linux"}, "Windows structured exceptions"),
+    "tests/test_log_batch.py": ({"linux"}, "the Windows log writer: SRW locks and threads"),
     # (the game: these run the lifted code of a real dump against Unicorn)
     "nx2/test_insn.py": ({"linux", "windows"}, "needs the game's modules (work/dump) and Unicorn"),
     "nx2/test_leaf.py": ({"linux", "windows"}, "needs the game's modules (work/dump) and Unicorn"),
